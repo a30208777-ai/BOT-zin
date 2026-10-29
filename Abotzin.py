@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -18,6 +19,9 @@ CANAL_ID = os.getenv("CANAL_REGISTRO_ID")  # opcional
 DATA_EVENTO = os.getenv("DATA_EVENTO", "2026-11-08")  # formato AAAA-MM-DD
 FUSO = ZoneInfo("America/Sao_Paulo")
 
+# Aceita "Nick: X raça: Y" ou "Nick: X, raça: Y" (sem diferenciar maiúsculas)
+PADRAO_UNICO = re.compile(r"nick\s*:\s*(.+?)[,;\s]+ra[cç]a\s*:\s*(.+)", re.IGNORECASE)
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 intents = discord.Intents.default()
@@ -30,6 +34,13 @@ conversas = {}
 def evento_e_hoje() -> bool:
     hoje = datetime.now(FUSO).date().isoformat()
     return hoje == DATA_EVENTO
+
+
+def resumo(conversa: dict) -> str:
+    return (
+        f"Só para confirmar, seu nick é **{conversa['nick']}** e sua raça é **{conversa['raca']}**.\n"
+        "Se sim, responda **sim** para participar do evento."
+    )
 
 
 @bot.event
@@ -58,7 +69,6 @@ async def on_message(message: discord.Message):
         if not foi_marcado:
             return
 
-        # No dia do evento, não registra: avisa e encerra
         if evento_e_hoje():
             await message.reply(
                 "ixi não consigo pegar sua inscrição mais o evento é hoje 😕\n"
@@ -68,6 +78,18 @@ async def on_message(message: discord.Message):
             return
 
         conversas[user_id] = {"etapa": "nick"}
+        conversa = conversas[user_id]
+
+        # Formato único já na mensagem da marcação
+        if texto:
+            m = PADRAO_UNICO.search(texto)
+            if m:
+                conversa["nick"] = m.group(1).strip()
+                conversa["raca"] = m.group(2).strip()
+                conversa["etapa"] = "confirmar"
+                await message.reply(resumo(conversa))
+                return
+
         await message.reply("Qual é o seu **nick no Mine**?")
         return
 
@@ -75,6 +97,15 @@ async def on_message(message: discord.Message):
         if not texto:
             await message.reply("Não entendi. Qual é o seu **nick no Mine**?")
             return
+
+        m = PADRAO_UNICO.search(texto)
+        if m:
+            conversa["nick"] = m.group(1).strip()
+            conversa["raca"] = m.group(2).strip()
+            conversa["etapa"] = "confirmar"
+            await message.reply(resumo(conversa))
+            return
+
         conversa["nick"] = texto
         conversa["etapa"] = "raca"
         await message.reply("Certo! E qual é a sua **raça**?")
@@ -86,10 +117,7 @@ async def on_message(message: discord.Message):
             return
         conversa["raca"] = texto
         conversa["etapa"] = "confirmar"
-        await message.reply(
-            f"Só para confirmar, seu nick é **{conversa['nick']}** e sua raça é **{conversa['raca']}**.\n"
-            "Se sim, responda **sim** para participar do evento."
-        )
+        await message.reply(resumo(conversa))
         return
 
     if conversa["etapa"] == "confirmar":
